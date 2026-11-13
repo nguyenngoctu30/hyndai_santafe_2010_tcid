@@ -38,6 +38,7 @@ Giắc K (tóm tắt chân dùng):
    K/83      ---- CAN-L
    K/25      ---- K-line (không dùng trong code này)
 ```
+<img width="713" height="379" alt="image" src="https://github.com/user-attachments/assets/997ba2b2-816e-40b5-ac04-2e3deb19c533" />
 
 ---
 
