@@ -1,6 +1,6 @@
 # SantaFe ECU TCI-D CAN Reader
 
-Đọc dữ liệu từ ECU Bosch EDC16C39 (Hyundai Santa Fe CRDi) bằng Arduino Uno + module MCP2515 qua CAN bus. Giải mã các giá trị từ dữ liệu thô (raw) và suy ra giá trị CAM từ trục khuỷu.
+Đọc dữ liệu từ ECU  (Hyundai Santa Fe TCI-D ) bằng Arduino Uno + module MCP2515 qua CAN bus. Giải mã các giá trị từ dữ liệu thô (raw) và suy ra giá trị CAM từ trục khuỷu.
 
 ---
 
