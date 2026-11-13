@@ -11,14 +11,6 @@
 #define RPM_SCALE     0.25       // hệ số RPM của khung 0x316 (xem mục 5)
 #define CRANK_PER_CAM 2.0        // 2 vòng khuỷu = 1 vòng cam
 ```
-
-Nên sửa luôn dòng chú thích phía trên `RPM_SCALE` thành:
-
-```cpp
-// Hệ số RPM của khung 0x316 (byte 3 cao, byte 2 thấp).
-// 0.25 suy ra từ đối chiếu với PID 0C; cần xác nhận bằng tốc độ thật.
-```
-
 ---
 
 ## 2. Sơ đồ chân ECU Bosch EDC16C39
