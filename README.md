@@ -228,3 +228,9 @@ Hạn chế:
 ## 8. An toàn
 
 Code chỉ đọc (Mode 01/03/07 và dịch vụ 0x21 đọc). Không ghi gì vào ECU. Nên dùng chế độ `l` (chỉ nghe) khi chỉ cần quan sát bus.
+
+--- 
+
+## 9. Tác giả
+
+Cấu trúc code + nghiên cứu thuộc về tác giả TUIOT
