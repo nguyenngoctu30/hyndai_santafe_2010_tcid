@@ -1,19 +1,19 @@
 # SantaFe ECU TCI-D CAN Reader
 
-Đọc dữ liệu từ ECU của Hyundai Santa Fe TCI-D bằng Arduino Uno + module MCP2515 qua CAN bus, và giải mã **4 thông số chính** từ dữ liệu thô (raw): **CRANK, CAM, BOOST, RAIL**.
+Đọc dữ liệu từ ECU của Hyundai Santa Fe TCI-D bằng Arduino Uno + module MCP2515 qua CAN bus, giải mã **4 thông số chính** từ dữ liệu thô (raw): **CRANK, CAM, BOOST, RAIL**, và hiển thị mỗi thông số lên một màn hình **LCD I2C** riêng (4 LCD).
 
-> Loại ECU chính xác của xe chưa được xác nhận (xem mục 7). Phần giải mã dữ liệu ở mục 3–5 không phụ thuộc loại ECU vì dùng PID OBD-II chuẩn.
+> Loại ECU chính xác của xe chưa được xác nhận (xem mục 8). Phần giải mã dữ liệu ở mục 3–6 không phụ thuộc loại ECU vì dùng PID OBD-II chuẩn.
 
 ---
 
-## 1. Tóm tắt: 4 thông số lấy từ đâu
+## 1. Tóm tắt: 4 thông số lấy từ đâu và hiển thị ở đâu
 
-| Thông số | Lấy từ | Công thức | Lệnh xem trong code |
-|---|---|---|---|
-| **CRANK** (RPM trục khuỷu) | Khung CAN 0x316 **và** PID 0C | `(256A+B)/4` (PID 0C) | `m` (dòng `[CRANK]`), `t` |
-| **CAM** (trục cam) | **Không có tín hiệu thật**: tính từ CRANK | `RPM_cam = RPM_khuỷu / 2` | `m` (dòng `[CAM]`), `t` |
-| **BOOST** (áp suất tăng áp) | PID 0B (MAP) và PID 33 (khí quyển) | `MAP − Khí quyển` | `m` (dòng `[BOOST]`), `t` |
-| **RAIL** (áp suất ray nhiên liệu) | PID 23 (và 59, 22 nếu ECU hỗ trợ) | `(256A+B) × 10` kPa | `m` (dòng `[RAIL]`), `t` |
+| Thông số | Lấy từ | Công thức | LCD | Địa chỉ I2C |
+|---|---|---|---|---|
+| **CRANK** (RPM trục khuỷu) | Khung CAN 0x316 **và** PID 0C | `(256A+B)/4` (PID 0C) | LCD 1 | 0x20 |
+| **CAM** (trục cam) | **Không có tín hiệu thật**: tính từ CRANK | `RPM_cam = RPM_khuỷu × 2` | LCD 2 | 0x21 |
+| **BOOST** (áp suất tăng áp) | PID 0B (MAP) và PID 33 (khí quyển) | `MAP − Khí quyển` | LCD 3 | 0x22 |
+| **RAIL** (áp suất ray nhiên liệu) | PID 23 (và 59, 22 nếu ECU hỗ trợ) | `(256A+B) × 10` kPa | LCD 4 | 0x23 |
 
 Hai cách để có dữ liệu:
 
@@ -41,11 +41,13 @@ Byte đầu của khung (PCI) theo ISO 15765-2:
 
 Phản hồi `7F xx 78` nghĩa là "đang xử lý", code chờ thêm tối đa 2 giây.
 
-Trước khi đọc, nên chạy lệnh `p` để biết ECU hỗ trợ PID nào. Code chỉ hỏi những PID có trong danh sách đó.
+Khi khởi động, code tự quét PID (lệnh `p`) để biết ECU hỗ trợ PID nào, và chỉ hỏi những PID có trong danh sách đó.
 
 ---
 
 ## 3. Thông số 1: CRANK (tốc độ trục khuỷu)
+
+Hiển thị trên **LCD 1 (0x20)**.
 
 ### 3.1 Cách 1: PID 0C (chuẩn, đáng tin nhất)
 
@@ -86,6 +88,8 @@ Cách đọc trong code:
 RPM = ((unsigned int)d[3] * 256 + d[2]) * RPM_SCALE;
 ```
 
+**LCD 1 hiển thị giá trị từ khung 0x316** (cập nhật liên tục theo khung ECU gửi). Nếu quá 0,5 giây không có khung mới, LCD hiện `-- rpm`.
+
 ### 3.3 Vì sao hệ số là 0.25
 
 Ban đầu code dùng hệ số 0.125, nhưng số của khung 0x316 luôn bằng khoảng một nửa PID 0C:
@@ -103,31 +107,38 @@ Hệ số 0.25 làm hai nguồn khớp nhau. Đây là **suy luận từ đối 
 
 ## 4. Thông số 2: CAM (trục cam)
 
+Hiển thị trên **LCD 2 (0x21)**.
+
 ### 4.1 Vì sao không đọc trực tiếp được
 
 - Cảm biến cam **không có PID** trong OBD-II chuẩn.
 - ECU không gửi tín hiệu thô của cảm biến cam lên CAN.
 
-Vì vậy giá trị CAM trong code **không phải đo từ cảm biến cam**, mà được **tính** từ CRANK dựa trên quan hệ cơ khí: **2 vòng khuỷu = 1 vòng cam**.
+Vì vậy giá trị CAM trong code **không phải đo từ cảm biến cam**, mà được **tính** từ CRANK theo tỉ số của bàn thử: **2 vòng cam = 1 vòng khuỷu** (cam quay nhanh gấp đôi khuỷu).
 
 ### 4.2 Công thức
 
 ```
-RPM_cam    = RPM_khuỷu / 2
+CRANK_PER_CAM = 0.5                 (tỉ số khuỷu : cam)
+RPM_cam    = RPM_khuỷu / CRANK_PER_CAM = RPM_khuỷu × 2
 góc_khuỷu += RPM_khuỷu × 6 × Δt     (1 vòng/phút = 6 độ/giây; Δt là thời gian giữa 2 khung 0x316, tính bằng giây)
 góc_khuỷu  = góc_khuỷu mod 720      (một chu trình 4 kỳ = 720°)
-góc_cam    = góc_khuỷu / 2          (0–360°)
+góc_cam    = (góc_khuỷu / CRANK_PER_CAM) mod 360    (0–360°)
 ```
 
-Ví dụ: khuỷu 741 vòng/phút → cam = 741 / 2 = 370,5 vòng/phút.
+Ví dụ: khuỷu 741 vòng/phút → cam = 741 × 2 = 1482 vòng/phút.
 
-Trong code, hằng số tỉ số là:
+Trong code:
 
 ```cpp
-#define CRANK_PER_CAM 2.0
+#define CRANK_PER_CAM 0.5
 ```
 
-Nếu bàn thử dùng bánh răng/dây curoa khác tỉ số 2:1, đếm số răng hai bánh rồi sửa hằng số này.
+Lưu ý quan trọng:
+
+- Với động cơ 4 kỳ thông thường, cam quay **chậm hơn** khuỷu (2 vòng khuỷu = 1 vòng cam, `CRANK_PER_CAM = 2.0`). Bàn thử này được cấu hình theo tỉ số **2 vòng cam = 1 vòng khuỷu** (`0.5`).
+- Tỉ số thật phụ thuộc số răng hai bánh trên bàn thử: `CRANK_PER_CAM = số răng bánh cam / số răng bánh khuỷu`. Hãy đếm răng để xác nhận rồi sửa hằng số cho khớp.
+- Góc cam được quấn về 0–360° bằng hàm `camDegNow()` (dùng `fmod`), nếu không góc sẽ vượt 360° khi tỉ số 0.5.
 
 ### 4.3 Cách kiểm tra cam thật sự có vấn đề
 
@@ -150,12 +161,14 @@ Ví dụ `hi = 0x03`, `lo = 0x41` → **P0341** (tương quan cảm biến cam/k
 ### 4.4 Hạn chế
 
 - Góc cam chỉ là góc **tương đối** tính từ lúc bật Arduino (không có mốc TDC hay răng thiếu), nên sẽ trôi dần.
-- In mỗi giây một lần thì góc nhảy lung tung vì cam quay nhiều vòng mỗi giây. Chỉ nên dùng `cam_rpm`.
+- In mỗi giây một lần thì góc nhảy lung tung vì cam quay nhiều vòng mỗi giây. Chỉ nên dùng `cam_rpm`. LCD 2 chỉ hiển thị RPM cam.
 - **Không thay được** việc đo cảm biến cam thật bằng oscilloscope.
 
 ---
 
 ## 5. Thông số 3: BOOST (áp suất tăng áp)
+
+Hiển thị trên **LCD 3 (0x22)**, đơn vị bar.
 
 Không có PID riêng cho boost. Cần 2 PID rồi trừ nhau.
 
@@ -182,11 +195,13 @@ Giải thích: boost âm là **bình thường** khi động cơ chỉ quay kh�
 Lưu ý trong code:
 
 - Nếu ECU không hỗ trợ PID 33, code giả định khí quyển là 101 kPa.
-- Nếu MAP = 0 hoặc 255, code coi là giá trị không hợp lệ và bỏ qua boost.
+- Nếu MAP = 0 hoặc 255, code coi là giá trị không hợp lệ, bỏ qua boost và LCD hiện `-- bar`.
 
 ---
 
 ## 6. Thông số 4: RAIL (áp suất ray nhiên liệu)
+
+Hiển thị trên **LCD 4 (0x23)**, đơn vị bar.
 
 ECU có thể hỗ trợ một hoặc nhiều PID sau, nên code thử cả ba:
 
@@ -212,13 +227,68 @@ raw = 13×256 + 232 = 3560
 Rail = 3560 × 10 = 35 600 kPa = 356,0 bar
 ```
 
-Nếu ECU không hỗ trợ PID 23/59/22, code báo "không hỗ trợ". Khi đó dùng lệnh `t` ghi các khung 0x329 và 0x545 để tìm byte nào đổi theo áp rail (phải so với máy chẩn đoán).
+LCD 4 ưu tiên PID 23; nếu không có thì dùng PID 59. PID 22 là áp suất tương đối nên chỉ in ra Serial, không đưa lên LCD.
+
+Nếu ECU không hỗ trợ PID 23/59/22, code báo "không hỗ trợ" và LCD hiện `-- bar`. Khi đó dùng lệnh `t` ghi các khung 0x329 và 0x545 để tìm byte nào đổi theo áp rail (phải so với máy chẩn đoán).
 
 Nhận xét từ số liệu đo: rail dao động 340–398 bar khi động cơ chỉ quay khoảng 370–740 vòng/phút là bất thường. Đây gợi ý ECU không ổn định, nhưng cần đo thêm mới kết luận được.
 
 ---
 
-## 7. ECU và sơ đồ chân (tham khảo, chưa xác nhận)
+## 7. Màn hình LCD I2C
+
+### 7.1 Địa chỉ 4 LCD
+
+Bốn module LCD I2C (chip PCF8574) dùng chung một đường I2C, phân biệt bằng địa chỉ đặt qua 3 chân A2, A1, A0 (hàn cầu trên module):
+
+| LCD | A2 | A1 | A0 | Địa chỉ | Hiển thị |
+|---|---|---|---|---|---|
+| LCD 1 | 0 | 0 | 0 | 0x20 | CRANK (RPM trục khuỷu) |
+| LCD 2 | 0 | 0 | 1 | 0x21 | CAM (RPM trục cam, suy ra) |
+| LCD 3 | 0 | 1 | 0 | 0x22 | BOOST (bar) |
+| LCD 4 | 0 | 1 | 1 | 0x23 | RAIL (bar) |
+
+Địa chỉ 0x20 đến 0x23 áp dụng cho chip **PCF8574**. Nếu module dùng chip **PCF8574A** thì địa chỉ là 0x38 đến 0x3B; khi đó phải sửa 4 dòng khai báo LCD trong code cho khớp. Dùng lệnh `i` để kiểm tra địa chỉ thực tế.
+
+### 7.2 Nối dây I2C
+
+Nối song song cả 4 LCD vào cùng một đường:
+
+| LCD I2C | Arduino Uno |
+|---|---|
+| VCC | 5V |
+| GND | GND |
+| SDA | A4 |
+| SCL | A5 |
+
+```
+                      +--> LCD 1 (0x20)  CRANK
+   Arduino A4 (SDA) --+--> LCD 2 (0x21)  CAM
+   Arduino A5 (SCL) --+--> LCD 3 (0x22)  BOOST
+   5V, GND -----------+--> LCD 4 (0x23)  RAIL
+```
+
+### 7.3 Nội dung hiển thị
+
+Mỗi LCD (16x2) hiện tên thông số ở dòng 1 và giá trị ở dòng 2:
+
+```
+LCD 1        LCD 2        LCD 3        LCD 4
+CRANK (khuyu)  CAM (suy ra)  BOOST        RAIL
+741 rpm        1482 rpm      -0.53 bar    356.0 bar
+```
+
+(Số trong ví dụ minh họa dựng từ log, không phải kết quả đo trực tiếp.) Giá trị không có dữ liệu hiện `--`. LCD cập nhật mỗi giây khi chạy chế độ `m` hoặc `t`.
+
+### 7.4 Thư viện và cấu hình
+
+- Cài thư viện **LiquidCrystal I2C** (tác giả Frank de Brabander) trong Library Manager. `Wire.h` có sẵn trong Arduino IDE.
+- Code mặc định LCD 16x2. Nếu dùng LCD 20x4, sửa `LCD_COLS` thành 20 và `LCD_ROWS` thành 4.
+- Arduino Uno chỉ có 32 KB flash và 2 KB RAM. Nếu biên dịch báo thiếu bộ nhớ, cần rút gọn bớt code.
+
+---
+
+## 8. ECU và sơ đồ chân (tham khảo, chưa xác nhận)
 
 Loại ECU của Santa Fe TCI-D chưa được xác nhận. Cách chắc chắn nhất: đọc nhãn trên thân ECU (số Bosch `0 281 0xx xxx`, số Hyundai `39xxx-xxxxx`) rồi tra sơ đồ chân đúng.
 
@@ -237,7 +307,7 @@ Bảng dưới là của **Bosch EDC16C39 bản Alfa Romeo / Fiat / Lancia** (ca
 
 ---
 
-## 8. Sơ đồ nối dây
+## 9. Sơ đồ nối dây MCP2515
 
 ### MCP2515 <-> Arduino Uno
 
@@ -268,30 +338,37 @@ MCP2515 cần điện trở đầu cuối 120 Ω giữa CANH và CANL (nhiều m
 
 ---
 
-## 9. Cách dùng
+## 10. Cách dùng
 
 Cấu hình trong code:
 
 ```cpp
 #define MCP_CLOCK     MCP_8MHZ   // đổi thành MCP_16MHZ nếu thạch anh module là 16 MHz
 #define RPM_SCALE     0.25       // hệ số RPM của khung 0x316 (xem mục 3.3)
-#define CRANK_PER_CAM 2.0        // 2 vòng khuỷu = 1 vòng cam
+#define CRANK_PER_CAM 0.5        // 2 vòng cam = 1 vòng khuỷu (xem mục 4.2)
+#define LCD_COLS      16         // LCD 16x2; đổi 20 và 4 nếu dùng LCD 20x4
+#define LCD_ROWS      2
 ```
 
 Mở Serial Monitor: **115200 baud**, chọn **Newline**.
 
+Khi bật nguồn, code tự dò tốc độ CAN, quét PID rồi **chạy luôn chế độ theo dõi `m`**, nên 4 LCD tự cập nhật mà không cần gõ lệnh.
+
 | Lệnh | Chức năng |
 |---|---|
-| `m` | Theo dõi 4 thông số (CRANK, CAM, BOOST, RAIL) mỗi giây |
-| `t` | In 1 dòng CSV mỗi giây để đối chiếu với máy chẩn đoán |
+| `m` | Theo dõi 4 thông số (CRANK, CAM, BOOST, RAIL) mỗi giây, cập nhật LCD (mặc định khi bật nguồn) |
+| `t` | In 1 dòng CSV mỗi giây để đối chiếu với máy chẩn đoán, cập nhật LCD |
 | `p` | Liệt kê PID Mode 01 mà ECU hỗ trợ |
 | `d` | Đọc mã lỗi (Mode 03 đã lưu + Mode 07 đang chờ) |
-| `s` | Nghe bus, chỉ in khi dữ liệu đổi |
-| `a` | Nghe bus, in tất cả khung |
+| `s` | Nghe bus, chỉ in khi dữ liệu đổi (LCD không cập nhật) |
+| `a` | Nghe bus, in tất cả khung (LCD không cập nhật) |
 | `k` | Quét dịch vụ riêng 0x21 (chỉ đọc) |
 | `wNN` | Theo dõi 1 LID, ví dụ `w05` |
 | `l` / `n` | Chế độ chỉ nghe (không ACK) / chế độ NORMAL |
 | `r` | Dò lại tốc độ CAN |
+| `i` | Quét I2C, kiểm tra 4 LCD (mong đợi 0x20 0x21 0x22 0x23) |
+
+Các lệnh `p`, `d`, `k`, `s`, `a` chuyển sang chế độ nghe/đọc nên LCD ngừng cập nhật cho đến khi gõ lại `m`.
 
 ### Ví dụ kết quả lệnh `m`
 
@@ -304,7 +381,7 @@ Mở Serial Monitor: **115200 baud**, chọn **Newline**.
 [RAIL]  PID 23: raw=3560  => 356.0 bar
 ```
 
-Mỗi dòng ứng với một thông số ở mục 3–6. Số liệu này đo khi dùng hệ số cũ 0.125, nên dòng khung 0x316 đang bằng khoảng một nửa PID 0C.
+Mỗi dòng ứng với một thông số ở mục 3–6. Log này đo bằng **bản code cũ** (hệ số 0.125 và cam = khuỷu / 2), nên số khung 0x316 đang bằng khoảng một nửa PID 0C và số CAM chưa theo tỉ số mới. Hãy chạy lại với code mới và cập nhật log.
 
 ### Cột CSV của lệnh `t`
 
@@ -319,11 +396,12 @@ Mỗi dòng ứng với một thông số ở mục 3–6. Số liệu này đo 
 
 ---
 
-## 10. Nhận xét kết quả đo
+## 11. Nhận xét kết quả đo
 
 - **P0341** xuất hiện ở cả Mode 03 và Mode 07: tương quan cam/khuỷu sai, còn đang xảy ra.
 - Áp rail dao động cùng với P0087/P0091/P0253: phù hợp với việc ECU không đồng bộ được pha cam/khuỷu. Đây là suy luận, cần đo tín hiệu thật trước khi kết luận cảm biến cam hỏng.
 - P0047, P0101, P0489, P0473 nhiều khả năng là lỗi thứ cấp do động cơ chưa chạy; chưa nên kết luận từng mã.
+- Một nguyên nhân có thể gây P0341 trên bàn thử là tỉ số bánh răng/dây curoa giữa khuỷu và cam chưa đúng với ECU mong đợi.
 
 Cách xác nhận cam:
 
@@ -334,12 +412,12 @@ Cách xác nhận cam:
 
 ---
 
-## 11. An toàn
+## 12. An toàn
 
 Code chỉ đọc (Mode 01/03/07 và dịch vụ 0x21 đọc). Không ghi gì vào ECU. Nên dùng chế độ `l` (chỉ nghe) khi chỉ cần quan sát bus.
 
 ---
 
-## 12. Tác giả
+## 13. Tác giả
 
 Cấu trúc code + nghiên cứu thuộc về tác giả TUIOT
