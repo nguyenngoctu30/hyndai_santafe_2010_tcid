@@ -1,18 +1,28 @@
 /*
- * SantaFe ECU CRDi CAN Reader
- * Doc ECU Bosch EDC16C39 (Hyundai Santa Fe) bang Arduino Uno + MCP2515
+ * SantaFe ECU TCI-D CAN Reader
+ * Doc ECU Hyundai Santa Fe TCI-D bang Arduino Uno + MCP2515
+ * Hien thi CRANK / CAM / BOOST / RAIL len 4 man hinh LCD I2C
  *
  * Noi day MCP2515 <-> Arduino Uno:
  *   VCC -> 5V      GND -> GND
  *   CS  -> D10     SO  -> D12 (MISO)
  *   SI  -> D11     SCK -> D13
- * CAN: CANH -> ECU (K/84 hoac OBD pin 6), CANL -> ECU (K/83 hoac OBD pin 14)
+ * CAN: CANH -> ECU CAN-H, CANL -> ECU CAN-L (hoac OBD pin 6 / pin 14)
  *      GND chung (OBD pin 4/5)
+ *
+ * 4 LCD I2C (module PCF8574) dung chung 1 bus:
+ *   VCC -> 5V   GND -> GND   SDA -> A4   SCL -> A5
+ *
+ *   LCD     A2 A1 A0   Dia chi   Hien thi
+ *   LCD 1   0  0  0    0x20      CRANK (RPM truc khuyu)
+ *   LCD 2   0  0  1    0x21      CAM   (RPM truc cam, suy ra)
+ *   LCD 3   0  1  0    0x22      BOOST (bar)
+ *   LCD 4   0  1  1    0x23      RAIL  (bar)
  *
  * Serial Monitor: 115200 baud, chon "Newline"
  * Lenh:
  *   t   = in 1 dong CSV moi giay (khung dinh ky + PID) de doi chieu may chan doan
- *   m   = theo doi de doc (RPM, boost, rail, cam...) moi giay
+ *   m   = theo doi de doc (RPM, boost, rail, cam...) moi giay  (mac dinh khi bat nguon)
  *   p   = liet ke PID Mode 01 ma ECU ho tro
  *   d   = doc ma loi (Mode 03 + Mode 07)
  *   s   = nghe bus, chi in khi du lieu doi
@@ -21,23 +31,38 @@
  *   wNN = theo doi 1 LID, vi du w05
  *   l   = che do chi nghe (khong ACK, khong gui)     n = che do NORMAL
  *   r   = do lai toc do CAN
+ *   i   = quet I2C, kiem tra 4 LCD (0x20..0x23)
  *
  * CAM: khong doc tu cam bien that. Gia tri CAM duoc SUY RA tu RPM khuyu
- * (khung 0x316) theo ti so CRANK_PER_CAM (2 vong khuyu = 1 vong cam).
+ * (khung 0x316) theo ti so CRANK_PER_CAM.
+ * 2 vong cam = 1 vong khuyu  =>  cam quay nhanh gap doi khuyu  =>  CRANK_PER_CAM = 0.5
  */
 
 #include <SPI.h>
+#include <Wire.h>
 #include <mcp_can.h>
+#include <LiquidCrystal_I2C.h>   // thu vien "LiquidCrystal I2C" (Frank de Brabander)
 
 #define CAN_CS_PIN 10
 #define MCP_CLOCK  MCP_8MHZ   // doi thanh MCP_16MHZ neu thach anh la 16MHz
 
-// He so RPM cua khung 0x316 (byte 3 cao, byte 2 thap), da xac nhan bang may chan doan
+// He so RPM cua khung 0x316 (byte 3 cao, byte 2 thap).
+// 0.25 suy ra tu doi chieu voi PID 0C; can xac nhan bang toc do that.
 #define RPM_SCALE 0.25
 
-// Ti so khuyu : cam. 2 vong khuyu = 1 vong cam
-// Neu ban thu dung dai curoa/banh rang khac ti so thi sua so nay
-#define CRANK_PER_CAM 2.0
+// Ti so khuyu : cam = CRANK_PER_CAM
+// 2 vong cam = 1 vong khuyu  =>  RPM_cam = RPM_khuyu / 0.5 = RPM_khuyu x 2
+// Neu thuc te cam quay cham hon khuyu thi doi thanh 2.0
+#define CRANK_PER_CAM 0.5
+
+// Kich thuoc LCD (16x2). Neu dung LCD 20x4 thi doi thanh 20 va 4
+#define LCD_COLS 16
+#define LCD_ROWS 2
+
+LiquidCrystal_I2C lcdCrank(0x20, LCD_COLS, LCD_ROWS);   // LCD 1
+LiquidCrystal_I2C lcdCam  (0x21, LCD_COLS, LCD_ROWS);   // LCD 2
+LiquidCrystal_I2C lcdBoost(0x22, LCD_COLS, LCD_ROWS);   // LCD 3
+LiquidCrystal_I2C lcdRail (0x23, LCD_COLS, LCD_ROWS);   // LCD 4
 
 MCP_CAN CAN(CAN_CS_PIN);
 
@@ -45,7 +70,7 @@ const uint8_t speedCodes[] = { CAN_500KBPS, CAN_250KBPS, CAN_125KBPS };
 const char *speedNames[]   = { "500 kbps", "250 kbps", "125 kbps" };
 const uint8_t NUM_SPEEDS   = 3;
 
-char mode = 's';          // 's' nghe, 'm' monitor, 't' csv, 'w' xem 1 LID
+char mode = 'm';          // 's' nghe, 'm' monitor, 't' csv, 'w' xem 1 LID
 bool showAll = false;
 int  activeSpeed = -1;
 unsigned long lastMon = 0;
@@ -65,11 +90,25 @@ float camRpmNow   = 0;          // RPM cam = khuyu / CRANK_PER_CAM
 float crankDeg    = 0;          // goc khuyu tich luy 0..720 do (tuong doi)
 unsigned long lastCrankUs = 0;  // thoi diem khung 0x316 gan nhat
 
+// Gia tri hien thi tren LCD
+float lcdBoostBar = 0;  bool lcdBoostOk = false;
+float lcdRailBar  = 0;  bool lcdRailOk  = false;
+
 // Bang PID Mode 01 ma ECU ho tro (PID 0x01..0xE0)
 byte pidMap[28];
 bool pidScanned = false;
 
 // ---------------------------------------------------------------
+void printHexByte(byte b) {
+  if (b < 0x10) Serial.print('0');
+  Serial.print(b, HEX);
+}
+
+// Goc cam tuong doi 0..360 do
+float camDegNow() {
+  return fmod(crankDeg / CRANK_PER_CAM, 360.0);
+}
+
 // Cap nhat CAM suy ra tu khung 0x316 (goi moi khi nhan khung nay)
 void updateCam(const byte *d) {
   unsigned long now = micros();
@@ -86,11 +125,95 @@ void updateCam(const byte *d) {
 }
 
 // ---------------------------------------------------------------
-void printHexByte(byte b) {
-  if (b < 0x10) Serial.print('0');
-  Serial.print(b, HEX);
+// LCD I2C
+// In 1 dong len LCD, tu dong chen khoang trang cho du do rong
+void lcdLine(LiquidCrystal_I2C &l, byte row, const char *s) {
+  char buf[LCD_COLS + 1];
+  byte i = 0;
+  while (i < LCD_COLS && s[i]) { buf[i] = s[i]; i++; }
+  while (i < LCD_COLS) buf[i++] = ' ';
+  buf[LCD_COLS] = 0;
+  l.setCursor(0, row);
+  l.print(buf);
 }
 
+void lcdInitAll() {
+  LiquidCrystal_I2C *all[4] = { &lcdCrank, &lcdCam, &lcdBoost, &lcdRail };
+  for (byte i = 0; i < 4; i++) {
+    all[i]->init();
+    all[i]->backlight();
+    all[i]->clear();
+    lcdLine(*all[i], 0, "SantaFe TCI-D");
+    lcdLine(*all[i], 1, "Dang khoi dong");
+  }
+}
+
+// Cap nhat 4 LCD: moi LCD 1 thong so
+void showLcd() {
+  char v[LCD_COLS + 1];
+  char num[12];
+  bool fresh = (lastCrankUs != 0) && ((micros() - lastCrankUs) < 500000UL);
+
+  // LCD 1: CRANK
+  lcdLine(lcdCrank, 0, "CRANK (khuyu)");
+  if (fresh) {
+    dtostrf(crankRpmNow, 1, 0, num);
+    snprintf(v, sizeof(v), "%s rpm", num);
+  } else {
+    strcpy(v, "-- rpm");
+  }
+  lcdLine(lcdCrank, 1, v);
+
+  // LCD 2: CAM (suy ra)
+  lcdLine(lcdCam, 0, "CAM (suy ra)");
+  if (fresh) {
+    dtostrf(camRpmNow, 1, 0, num);
+    snprintf(v, sizeof(v), "%s rpm", num);
+  } else {
+    strcpy(v, "-- rpm");
+  }
+  lcdLine(lcdCam, 1, v);
+
+  // LCD 3: BOOST
+  lcdLine(lcdBoost, 0, "BOOST");
+  if (lcdBoostOk) {
+    dtostrf(lcdBoostBar, 1, 2, num);
+    snprintf(v, sizeof(v), "%s bar", num);
+  } else {
+    strcpy(v, "-- bar");
+  }
+  lcdLine(lcdBoost, 1, v);
+
+  // LCD 4: RAIL
+  lcdLine(lcdRail, 0, "RAIL");
+  if (lcdRailOk) {
+    dtostrf(lcdRailBar, 1, 1, num);
+    snprintf(v, sizeof(v), "%s bar", num);
+  } else {
+    strcpy(v, "-- bar");
+  }
+  lcdLine(lcdRail, 1, v);
+}
+
+// Quet I2C de kiem tra 4 LCD
+void i2cScan() {
+  Serial.println(F("--- Quet I2C ---"));
+  byte found = 0;
+  for (byte a = 1; a < 127; a++) {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() == 0) {
+      Serial.print(F(" 0x"));
+      printHexByte(a);
+      found++;
+    }
+  }
+  Serial.println();
+  Serial.print(F("Thay "));
+  Serial.print(found);
+  Serial.println(F(" thiet bi. Mong doi: 0x20 0x21 0x22 0x23 (neu module la PCF8574A thi dia chi la 0x38..0x3B)."));
+}
+
+// ---------------------------------------------------------------
 bool readFrame(unsigned long &id, bool &ext, byte &len, byte *buf) {
   if (CAN.checkReceive() != CAN_MSGAVAIL) return false;
   CAN.readMsgBuf(&id, &len, bigBuf);
@@ -175,7 +298,7 @@ void runDetection() {
   }
   if (activeSpeed >= 0) {
     normalOn();   // ECU de ban can module ACK; tren xe that co cac node khac ACK san
-    Serial.println(F("San sang. Lenh: t m p d s a k wNN l n r"));
+    Serial.println(F("San sang. Lenh: t m p d s a k wNN l n r i"));
   } else if (activeSpeed == -1) {
     Serial.println(F("Khong thay ECU phat khung nao. Kiem tra nguon, CANH/CANL, GND chung."));
     Serial.println(F("Van thu duoc lenh p / m / d / k (mac dinh 500 kbps)."));
@@ -354,6 +477,9 @@ void printSnapHex(byte k) {
 
 void doCsv() {
   byte a, b;
+  lcdBoostOk = false;
+  lcdRailOk  = false;
+
   Serial.print(millis());
   Serial.print(',');
 
@@ -384,6 +510,11 @@ void doCsv() {
   Serial.print(',');
   if (mapKpa >= 0 && baroKpa >= 0) Serial.print(mapKpa - baroKpa);
   Serial.print(',');
+  if (mapKpa > 0 && mapKpa < 255) {
+    int baro = (baroKpa >= 0) ? baroKpa : 101;
+    lcdBoostBar = (mapKpa - baro) / 100.0;
+    lcdBoostOk = true;
+  }
 
   // Ap suat rail: PID 23 (10 kPa/bit), 59, 22 - in gia tri tho de doi chieu
   if (getPid(0x23, a, b)) {
@@ -391,11 +522,17 @@ void doCsv() {
     Serial.print(raw);
     Serial.print(',');
     Serial.print(raw * 0.1, 1);     // 10 kPa/bit = 0.1 bar/bit
+    lcdRailBar = raw * 0.1;
+    lcdRailOk = true;
   } else {
     Serial.print(',');
   }
   Serial.print(',');
-  if (getPid(0x59, a, b)) Serial.print((unsigned int)a * 256 + b);
+  if (getPid(0x59, a, b)) {
+    unsigned int raw = (unsigned int)a * 256 + b;
+    Serial.print(raw);
+    if (!lcdRailOk) { lcdRailBar = raw * 0.1; lcdRailOk = true; }
+  }
   Serial.print(',');
   if (getPid(0x22, a, b)) Serial.print((unsigned int)a * 256 + b);
   Serial.print(',');
@@ -412,7 +549,9 @@ void doCsv() {
   Serial.print(',');
   Serial.print(camRpmNow, 1);
   Serial.print(',');
-  Serial.println(crankDeg / CRANK_PER_CAM, 0);
+  Serial.println(camDegNow(), 0);
+
+  showLcd();
 }
 
 // ---------------------------------------------------------------
@@ -421,6 +560,8 @@ void doMonitor() {
   byte a, b;
   unsigned int rpm = 0;
   bool haveRpm = false;
+  lcdBoostOk = false;
+  lcdRailOk  = false;
   Serial.println(F("=== Thong so ==="));
 
   // 1) CRANK: ECU chi cho RPM, khong cho tin hieu tho cua cam bien
@@ -435,12 +576,12 @@ void doMonitor() {
     Serial.println(((unsigned int)a * 256 + b) / 4);
   }
 
-  // 2) CAM: suy ra tu khuyu (2 vong khuyu = 1 vong cam), KHONG phai cam bien that
+  // 2) CAM: suy ra tu khuyu (2 vong cam = 1 vong khuyu), KHONG phai cam bien that
   if (micros() - lastCrankUs > 500000UL) camRpmNow = 0;
   Serial.print(F("[CAM]   (suy ra tu crank) RPM = "));
   Serial.print(camRpmNow, 1);
   Serial.print(F("  goc cam tuong doi = "));
-  Serial.print(crankDeg / CRANK_PER_CAM, 0);
+  Serial.print(camDegNow(), 0);
   Serial.println(F(" do"));
 
   // 3) BOOST = MAP (tuyet doi) - ap suat khi quyen
@@ -464,6 +605,8 @@ void doMonitor() {
       Serial.print(F(" kPa = "));
       Serial.print(boost / 100.0, 2);
       Serial.println(F(" bar"));
+      lcdBoostBar = boost / 100.0;
+      lcdBoostOk = true;
     }
   } else {
     Serial.println(F("[BOOST] ECU khong tra loi PID 0B"));
@@ -479,6 +622,8 @@ void doMonitor() {
     Serial.print(raw * 0.1, 1);
     Serial.println(F(" bar"));
     railOk = true;
+    lcdRailBar = raw * 0.1;
+    lcdRailOk = true;
     if (haveRpm && rpm == 0 && raw * 0.1 > 300)
       Serial.println(F("   ! Rail cao du dong co dung: co the la gia tri mac dinh"));
   }
@@ -490,6 +635,7 @@ void doMonitor() {
     Serial.print(raw * 0.1, 1);
     Serial.println(F(" bar"));
     railOk = true;
+    if (!lcdRailOk) { lcdRailBar = raw * 0.1; lcdRailOk = true; }
   }
   if (getPid(0x22, a, b)) {
     unsigned int raw = (unsigned int)a * 256 + b;
@@ -513,6 +659,8 @@ void doMonitor() {
     Serial.print((int)a - 40);
     Serial.println(F(" C"));
   }
+
+  showLcd();
 }
 
 // ---------------------------------------------------------------
@@ -662,13 +810,24 @@ byte readHexByte() {
 void setup() {
   Serial.begin(115200);
   while (!Serial) {}
-  Serial.println(F("=== SantaFe ECU CRDi CAN Reader ==="));
+  Serial.println(F("=== SantaFe ECU TCI-D CAN Reader ==="));
+
+  lcdInitAll();          // bat 4 LCD, hien thi dong khoi dong
+
   runDetection();
 
   if (activeSpeed == -2) {
+    lcdLine(lcdCrank, 0, "LOI MCP2515");
+    lcdLine(lcdCrank, 1, "Kiem tra day SPI");
     Serial.println(F("DUNG: MCP2515 khong phan hoi. Sua phan cung roi reset Arduino."));
     while (true) { delay(1000); }
   }
+
+  // Mac dinh chay che do theo doi de 4 LCD tu cap nhat
+  mode = 'm';
+  normalOn();
+  scanPids();
+  Serial.println(F("Theo doi thong so (moi 1 giay). Gui 's' de chuyen sang nghe bus."));
 }
 
 void loop() {
@@ -695,6 +854,7 @@ void loop() {
     else if (c == 'l')   { listenOn(); Serial.println(F("Che do chi nghe (khong ACK, khong gui).")); }
     else if (c == 'n')   { normalOn(); Serial.println(F("Che do NORMAL.")); }
     else if (c == 'r')   { mode = 's'; pidScanned = false; runDetection(); }
+    else if (c == 'i')   { i2cScan(); }
   }
 
   if (mode == 's') {
