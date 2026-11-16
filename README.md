@@ -2,7 +2,6 @@
 
 Đọc dữ liệu từ ECU của Hyundai Santa Fe TCI-D bằng Arduino Uno + module MCP2515 qua CAN bus, giải mã **4 thông số chính** từ dữ liệu thô (raw): **CRANK, CAM, BOOST, RAIL**, và hiển thị mỗi thông số lên một màn hình **LCD I2C** riêng (4 LCD).
 
-> Loại ECU chính xác của xe chưa được xác nhận (xem mục 8). Phần giải mã dữ liệu ở mục 3–6 không phụ thuộc loại ECU vì dùng PID OBD-II chuẩn.
 
 ---
 
