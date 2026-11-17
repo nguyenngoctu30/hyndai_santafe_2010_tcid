@@ -59,10 +59,10 @@
 #define LCD_COLS 16
 #define LCD_ROWS 2
 
-LiquidCrystal_I2C lcdCrank(0x20, LCD_COLS, LCD_ROWS);   // LCD 1
-LiquidCrystal_I2C lcdCam  (0x21, LCD_COLS, LCD_ROWS);   // LCD 2
-LiquidCrystal_I2C lcdBoost(0x22, LCD_COLS, LCD_ROWS);   // LCD 3
-LiquidCrystal_I2C lcdRail (0x23, LCD_COLS, LCD_ROWS);   // LCD 4
+LiquidCrystal_I2C lcdCrank(0x27, LCD_COLS, LCD_ROWS);   // LCD 1
+LiquidCrystal_I2C lcdCam  (0x26, LCD_COLS, LCD_ROWS);   // LCD 2
+LiquidCrystal_I2C lcdBoost(0x25, LCD_COLS, LCD_ROWS);   // LCD 3
+LiquidCrystal_I2C lcdRail (0x24, LCD_COLS, LCD_ROWS);   // LCD 4
 
 MCP_CAN CAN(CAN_CS_PIN);
 
