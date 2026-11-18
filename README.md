@@ -2,6 +2,7 @@
 
 Đọc dữ liệu từ ECU của Hyundai Santa Fe TCI-D bằng Arduino Uno + module MCP2515 qua CAN bus, giải mã **4 thông số chính** từ dữ liệu thô (raw): **CRANK, CAM, BOOST, RAIL**, và hiển thị mỗi thông số lên một màn hình **LCD I2C** riêng (4 LCD).
 
+Phiên bản này dành cho **thiết bị gắn cố định trên xe**: không cần máy tính, không nhận lệnh, tự chạy khi cấp nguồn.
 
 ---
 
@@ -9,16 +10,16 @@
 
 | Thông số | Lấy từ | Công thức | LCD | Địa chỉ I2C |
 |---|---|---|---|---|
-| **CRANK** (RPM trục khuỷu) | Khung CAN 0x316 **và** PID 0C | `(256A+B)/4` (PID 0C) | LCD 1 | 0x27 |
+| **CRANK** (RPM trục khuỷu) | Khung CAN 0x316 (dự phòng: PID 0C) | `raw × 0.25` (khung 0x316), `(256A+B)/4` (PID 0C) | LCD 1 | 0x27 |
 | **CAM** (trục cam) | **Không có tín hiệu thật**: tính từ CRANK | `RPM_cam = RPM_khuỷu × 2` | LCD 2 | 0x26 |
 | **BOOST** (áp suất tăng áp) | PID 0B (MAP) và PID 33 (khí quyển) | `MAP − Khí quyển` | LCD 3 | 0x25 |
-| **RAIL** (áp suất ray nhiên liệu) | PID 23 (và 59, 22 nếu ECU hỗ trợ) | `(256A+B) × 10` kPa | LCD 4 | 0x24 |
+| **RAIL** (áp suất ray nhiên liệu) | PID 23 (dự phòng: PID 59) | `(256A+B) × 10` kPa | LCD 4 | 0x24 |
 
 Hai cách để có dữ liệu:
 
 | Nguồn | Cách lấy | Tính chất |
 |---|---|---|
-| Khung phát định kỳ (0x316, 0x329, 0x545) | ECU tự gửi, Arduino chỉ cần nghe | Định dạng riêng của hãng, phải suy ngược |
+| Khung phát định kỳ (0x316) | ECU tự gửi, Arduino chỉ cần nghe | Định dạng riêng của hãng, phải suy ngược |
 | Phản hồi OBD-II (ID 0x7E8) | Arduino gửi yêu cầu tới ID 0x7DF | Công thức chuẩn SAE J1979 |
 
 ---
@@ -40,15 +41,39 @@ Byte đầu của khung (PCI) theo ISO 15765-2:
 
 Phản hồi `7F xx 78` nghĩa là "đang xử lý", code chờ thêm tối đa 2 giây.
 
-Khi khởi động, code tự quét PID (lệnh `p`) để biết ECU hỗ trợ PID nào, và chỉ hỏi những PID có trong danh sách đó.
+Khi khởi động, code tự quét PID để biết ECU hỗ trợ PID nào, và chỉ hỏi những PID có trong danh sách đó. Nếu lúc bật nguồn ECU chưa sẵn sàng, code quét lại mỗi 10 giây cho đến khi được.
 
 ---
 
 ## 3. Thông số 1: CRANK (tốc độ trục khuỷu)
 
-Hiển thị trên **LCD 1 (0x20)**.
+Hiển thị trên **LCD 1 (0x27)**.
 
-### 3.1 Cách 1: PID 0C (chuẩn, đáng tin nhất)
+### 3.1 Nguồn chính: khung định kỳ 0x316
+
+ECU tự gửi khung này, không cần yêu cầu. Ví dụ khung thu được:
+
+| Byte | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|---|---|---|---|
+| Giá trị | 21 | FF | **94** | **0B** | FF | 15 | 00 | 00 |
+
+Little-endian: byte 2 là byte thấp, byte 3 là byte cao.
+
+```
+raw = byte3 × 256 + byte2 = 0x0B94 = 2964
+RPM = raw × RPM_SCALE = 2964 × 0.25 = 741
+```
+
+Trong code:
+
+```cpp
+#define RPM_SCALE 0.25
+RPM = ((unsigned int)d[3] * 256 + d[2]) * RPM_SCALE;
+```
+
+### 3.2 Nguồn dự phòng: PID 0C (chuẩn)
+
+Nếu quá 1 giây không nhận được khung 0x316, code chuyển sang hỏi PID 0C:
 
 ```
 Yêu cầu : 02 01 0C
@@ -65,30 +90,6 @@ raw = 11×256 + 148 = 2964
 RPM = 2964 / 4 = 741 vòng/phút
 ```
 
-### 3.2 Cách 2: khung định kỳ 0x316
-
-ECU tự gửi khung này, không cần yêu cầu. Ví dụ khung thu được:
-
-| Byte | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
-|---|---|---|---|---|---|---|---|---|
-| Giá trị | 21 | FF | **94** | **0B** | FF | 15 | 00 | 00 |
-
-Little-endian: byte 2 là byte thấp, byte 3 là byte cao.
-
-```
-raw = byte3 × 256 + byte2 = 0x0B94 = 2964
-RPM = raw × RPM_SCALE = 2964 × 0.25 = 741
-```
-
-Cách đọc trong code:
-
-```cpp
-#define RPM_SCALE 0.25
-RPM = ((unsigned int)d[3] * 256 + d[2]) * RPM_SCALE;
-```
-
-**LCD 1 hiển thị giá trị từ khung 0x316** (cập nhật liên tục theo khung ECU gửi). Nếu quá 0,5 giây không có khung mới, LCD hiện `-- rpm`.
-
 ### 3.3 Vì sao hệ số là 0.25
 
 Ban đầu code dùng hệ số 0.125, nhưng số của khung 0x316 luôn bằng khoảng một nửa PID 0C:
@@ -99,6 +100,9 @@ Ban đầu code dùng hệ số 0.125, nhưng số của khung 0x316 luôn bằn
 | 378 | 748 | 1,98 |
 | 362 | 757 | 2,09 |
 | 361 | 741 | 2,05 |
+| 365 | 725 | 1,99 |
+| 379 | 729 | 1,92 |
+| 371 | 756 | 2,04 |
 
 Hệ số 0.25 làm hai nguồn khớp nhau. Đây là **suy luận từ đối chiếu**, chưa phải kết quả kiểm chứng. Hãy xác nhận bằng một tốc độ thật (tốc độ motor × tỉ số bánh răng, hoặc số RPM trên máy chẩn đoán). Nếu hai số vẫn lệch, **tin PID 0C**.
 
@@ -106,7 +110,7 @@ Hệ số 0.25 làm hai nguồn khớp nhau. Đây là **suy luận từ đối 
 
 ## 4. Thông số 2: CAM (trục cam)
 
-Hiển thị trên **LCD 2 (0x21)**.
+Hiển thị trên **LCD 2 (0x26)**.
 
 ### 4.1 Vì sao không đọc trực tiếp được
 
@@ -119,10 +123,7 @@ Vì vậy giá trị CAM trong code **không phải đo từ cảm biến cam**,
 
 ```
 CRANK_PER_CAM = 0.5                 (tỉ số khuỷu : cam)
-RPM_cam    = RPM_khuỷu / CRANK_PER_CAM = RPM_khuỷu × 2
-góc_khuỷu += RPM_khuỷu × 6 × Δt     (1 vòng/phút = 6 độ/giây; Δt là thời gian giữa 2 khung 0x316, tính bằng giây)
-góc_khuỷu  = góc_khuỷu mod 720      (một chu trình 4 kỳ = 720°)
-góc_cam    = (góc_khuỷu / CRANK_PER_CAM) mod 360    (0–360°)
+RPM_cam = RPM_khuỷu / CRANK_PER_CAM = RPM_khuỷu × 2
 ```
 
 Ví dụ: khuỷu 741 vòng/phút → cam = 741 × 2 = 1482 vòng/phút.
@@ -137,18 +138,13 @@ Lưu ý quan trọng:
 
 - Với động cơ 4 kỳ thông thường, cam quay **chậm hơn** khuỷu (2 vòng khuỷu = 1 vòng cam, `CRANK_PER_CAM = 2.0`). Bàn thử này được cấu hình theo tỉ số **2 vòng cam = 1 vòng khuỷu** (`0.5`).
 - Tỉ số thật phụ thuộc số răng hai bánh trên bàn thử: `CRANK_PER_CAM = số răng bánh cam / số răng bánh khuỷu`. Hãy đếm răng để xác nhận rồi sửa hằng số cho khớp.
-- Góc cam được quấn về 0–360° bằng hàm `camDegNow()` (dùng `fmod`), nếu không góc sẽ vượt 360° khi tỉ số 0.5.
+- Phiên bản gắn xe **không còn tính góc cam tương đối**, chỉ hiển thị RPM cam.
 
 ### 4.3 Cách kiểm tra cam thật sự có vấn đề
 
-Dùng lệnh `d` để đọc mã lỗi:
+Phiên bản gắn xe **không đọc mã lỗi**. Để kiểm tra mã lỗi (ví dụ P0341), dùng máy chẩn đoán hoặc nạp lại bản code có lệnh (bản dùng trên bàn thử, lệnh `d`).
 
-```
-Yêu cầu : 01 03  (Mode 03, mã đã lưu)   hoặc   01 07  (Mode 07, mã đang chờ)
-Phản hồi: 43 (hoặc 47), byte đếm, rồi các cặp 2 byte "hi lo" của từng mã
-```
-
-Giải mã mỗi mã lỗi:
+Cách giải mã mã lỗi OBD-II (Mode 03 đã lưu, Mode 07 đang chờ), mỗi mã gồm 2 byte `hi lo`:
 
 - 2 bit cao của `hi`: loại (0 = P, 1 = C, 2 = B, 3 = U)
 - 2 bit tiếp: chữ số thứ nhất (0–3)
@@ -159,15 +155,14 @@ Ví dụ `hi = 0x03`, `lo = 0x41` → **P0341** (tương quan cảm biến cam/k
 
 ### 4.4 Hạn chế
 
-- Góc cam chỉ là góc **tương đối** tính từ lúc bật Arduino (không có mốc TDC hay răng thiếu), nên sẽ trôi dần.
-- In mỗi giây một lần thì góc nhảy lung tung vì cam quay nhiều vòng mỗi giây. Chỉ nên dùng `cam_rpm`. LCD 2 chỉ hiển thị RPM cam.
-- **Không thay được** việc đo cảm biến cam thật bằng oscilloscope.
+- Giá trị tính toán, **không thay được** việc đo cảm biến cam thật bằng oscilloscope.
+- Độ đúng phụ thuộc hệ số `RPM_SCALE` (mục 3.3) và tỉ số `CRANK_PER_CAM` (mục 4.2).
 
 ---
 
 ## 5. Thông số 3: BOOST (áp suất tăng áp)
 
-Hiển thị trên **LCD 3 (0x22)**, đơn vị bar.
+Hiển thị trên **LCD 3 (0x25)**, đơn vị bar.
 
 Không có PID riêng cho boost. Cần 2 PID rồi trừ nhau.
 
@@ -189,26 +184,24 @@ Phản hồi baro: 03 41 33 64      → A = 0x64 = 100 kPa
 Boost = 47 − 100 = −53 kPa = −0,53 bar
 ```
 
-Giải thích: boost âm là **bình thường** khi động cơ chỉ quay khởi động, vì cổ hút đang hút chân không. Boost dương chỉ có khi turbo thật sự nạp áp.
-
 Lưu ý trong code:
 
-- Nếu ECU không hỗ trợ PID 33, code giả định khí quyển là 101 kPa.
-- Nếu MAP = 0 hoặc 255, code coi là giá trị không hợp lệ, bỏ qua boost và LCD hiện `-- bar`.
+- Áp suất khí quyển ít thay đổi nên chỉ đọc 1 lần trong 10 chu kỳ. Giá trị chỉ được nhận nếu nằm trong khoảng 80 đến 110 kPa; ngoài khoảng này giữ giá trị trước (mặc định ban đầu 101 kPa).
+- MAP = 0 được coi là giá trị không hợp lệ (tính là "bằng 0"), MAP = 255 coi là không có dữ liệu.
+- Kết quả boost tính ra bằng 0 **không** bị lọc, vì khi không tải MAP gần bằng khí quyển nên boost ≈ 0 là số thật.
+
+Về số liệu đo: trong log, MAP đứng yên ở 47 kPa (boost −0,53 bar) qua mọi lần đo. Với động cơ diesel đang nổ, MAP lúc cầm chừng thường gần bằng áp suất khí quyển, nên số này **cần được kiểm tra** (có thể là giá trị mô phỏng của bàn thử). Chưa kết luận được.
 
 ---
 
 ## 6. Thông số 4: RAIL (áp suất ray nhiên liệu)
 
-Hiển thị trên **LCD 4 (0x23)**, đơn vị bar.
+Hiển thị trên **LCD 4 (0x24)**, đơn vị bar.
 
-ECU có thể hỗ trợ một hoặc nhiều PID sau, nên code thử cả ba:
-
-| PID | Ý nghĩa | Công thức | Đơn vị |
-|---|---|---|---|
-| 23 | Áp suất ray (đo, dùng cho diesel) | `(256A + B) × 10` | kPa |
-| 59 | Áp suất ray (tuyệt đối) | `(256A + B) × 10` | kPa |
-| 22 | Áp suất ray tương đối với chân không đường nạp | `(256A + B) × 0.079` | kPa |
+| PID | Ý nghĩa | Công thức | Đơn vị | Dùng cho LCD |
+|---|---|---|---|---|
+| 23 | Áp suất ray (đo, dùng cho diesel) | `(256A + B) × 10` | kPa | Ưu tiên |
+| 59 | Áp suất ray (tuyệt đối) | `(256A + B) × 10` | kPa | Dự phòng nếu PID 23 không có |
 
 ```
 Yêu cầu : 02 01 23
@@ -226,30 +219,65 @@ raw = 13×256 + 232 = 3560
 Rail = 3560 × 10 = 35 600 kPa = 356,0 bar
 ```
 
-LCD 4 ưu tiên PID 23; nếu không có thì dùng PID 59. PID 22 là áp suất tương đối nên chỉ in ra Serial, không đưa lên LCD.
+Nếu ECU không hỗ trợ PID 23 và 59, LCD 4 hiện `-- bar`.
 
-Nếu ECU không hỗ trợ PID 23/59/22, code báo "không hỗ trợ" và LCD hiện `-- bar`. Khi đó dùng lệnh `t` ghi các khung 0x329 và 0x545 để tìm byte nào đổi theo áp rail (phải so với máy chẩn đoán).
-
-Nhận xét từ số liệu đo: rail dao động 340–398 bar khi động cơ chỉ quay khoảng 370–740 vòng/phút là bất thường. Đây gợi ý ECU không ổn định, nhưng cần đo thêm mới kết luận được.
+Nhận xét từ số liệu đo: rail dao động từ 336 đến 393 bar trong chưa đầy 3 giây ở tốc độ khoảng 740 vòng/phút. Mức dao động này cần đối chiếu với máy chẩn đoán trước khi kết luận.
 
 ---
 
-## 7. Màn hình LCD I2C
+## 7. Cơ chế chống hiển thị số 0
 
-### 7.1 Địa chỉ 4 LCD
+ECU có lúc trả về 0 (hoặc không trả lời) dù động cơ vẫn hoạt động. Khi động cơ đang nổ, áp ray hay RPM không thể bằng 0, nên số 0 đó là lỗi dữ liệu. Code xử lý như sau cho cả 4 thông số:
 
-Bốn module LCD I2C (chip PCF8574) dùng chung một đường I2C, phân biệt bằng địa chỉ đặt qua 3 chân A2, A1, A0 (hàn cầu trên module):
+1. Mỗi thông số nhớ **giá trị hợp lệ gần nhất** và thời điểm nhận được.
+2. Khi lần đọc mới bằng 0 hoặc không có phản hồi, LCD **giữ giá trị cũ** tối đa 5 giây (`HOLD_MS`).
+3. Nếu giá trị cũ không được làm mới quá 2,2 giây (`FRESH_MS`), LCD thêm dấu `*` ở cuối dòng để báo "đang giữ số cũ".
+4. Nếu sau 5 giây vẫn là 0, LCD mới hiện **0 thật** (ví dụ khi tắt máy). Nếu sau 5 giây vẫn không có dữ liệu, LCD hiện `--`.
+
+| Hiển thị | Ý nghĩa |
+|---|---|
+| `741 rpm` | Giá trị mới, hợp lệ |
+| `741 rpm*` | ECU vừa lỡ nhịp, đang giữ giá trị cũ |
+| `0 rpm` | ECU báo 0 liên tục hơn 5 giây (0 thật) |
+| `-- rpm` | Chưa có dữ liệu, hoặc mất dữ liệu quá 5 giây |
+
+Hằng số có thể chỉnh trong code:
+
+```cpp
+#define HOLD_MS  5000UL   // giữ giá trị cũ tối đa bao nhiêu ms
+#define FRESH_MS 2200UL   // quá mốc này thì hiện dấu *
+#define SHOW_HOLD_MARK 1  // 0 = không hiện dấu *
+```
+
+---
+
+## 8. Màn hình LCD I2C
+
+### 8.1 Địa chỉ 4 LCD
+
+Bốn module LCD I2C (chip PCF8574) dùng chung một đường I2C, phân biệt bằng địa chỉ đặt qua 3 chân A2, A1, A0 (hàn cầu trên module). Địa chỉ PCF8574 là `0x20 + (A2A1A0)`:
 
 | LCD | A2 | A1 | A0 | Địa chỉ | Hiển thị |
 |---|---|---|---|---|---|
-| LCD 1 | 0 | 0 | 0 | 0x20 | CRANK (RPM trục khuỷu) |
-| LCD 2 | 0 | 0 | 1 | 0x21 | CAM (RPM trục cam, suy ra) |
-| LCD 3 | 0 | 1 | 0 | 0x22 | BOOST (bar) |
-| LCD 4 | 0 | 1 | 1 | 0x23 | RAIL (bar) |
+| LCD 1 | 1 | 1 | 1 | 0x27 | CRANK (RPM trục khuỷu) |
+| LCD 2 | 1 | 1 | 0 | 0x26 | CAM (RPM trục cam, suy ra) |
+| LCD 3 | 1 | 0 | 1 | 0x25 | BOOST (bar) |
+| LCD 4 | 1 | 0 | 0 | 0x24 | RAIL (bar) |
 
-Địa chỉ 0x20 đến 0x23 áp dụng cho chip **PCF8574**. Nếu module dùng chip **PCF8574A** thì địa chỉ là 0x38 đến 0x3B; khi đó phải sửa 4 dòng khai báo LCD trong code cho khớp. Dùng lệnh `i` để kiểm tra địa chỉ thực tế.
+(Các giá trị A2, A1, A0 ở bảng này suy ra từ địa chỉ theo công thức trên; hãy đối chiếu với trạng thái cầu hàn thực tế trên module.)
 
-### 7.2 Nối dây I2C
+Nếu module dùng chip **PCF8574A** thì địa chỉ cơ sở là 0x38 thay vì 0x20. Khi đó phải sửa 4 dòng định nghĩa địa chỉ trong code:
+
+```cpp
+#define LCD_ADDR_CRANK 0x27
+#define LCD_ADDR_CAM   0x26
+#define LCD_ADDR_BOOST 0x25
+#define LCD_ADDR_RAIL  0x24
+```
+
+**Kiểm tra trước khi gắn cố định lên xe:** khi bật nguồn, code in danh sách địa chỉ I2C tìm thấy ra Serial một lần (dòng `I2C: 0x.. 0x.. ...`). Cắm máy tính vào, mở Serial Monitor 115200 baud và xác nhận có đủ 4 địa chỉ. Sau khi gắn cố định sẽ không kiểm tra được nữa.
+
+### 8.2 Nối dây I2C
 
 Nối song song cả 4 LCD vào cùng một đường:
 
@@ -261,25 +289,25 @@ Nối song song cả 4 LCD vào cùng một đường:
 | SCL | A5 |
 
 ```
-                      +--> LCD 1 (0x20)  CRANK
-   Arduino A4 (SDA) --+--> LCD 2 (0x21)  CAM
-   Arduino A5 (SCL) --+--> LCD 3 (0x22)  BOOST
-   5V, GND -----------+--> LCD 4 (0x23)  RAIL
+                      +--> LCD 1 (0x27)  CRANK
+   Arduino A4 (SDA) --+--> LCD 2 (0x26)  CAM
+   Arduino A5 (SCL) --+--> LCD 3 (0x25)  BOOST
+   5V, GND -----------+--> LCD 4 (0x24)  RAIL
 ```
 
-### 7.3 Nội dung hiển thị
+### 8.3 Nội dung hiển thị
 
 Mỗi LCD (16x2) hiện tên thông số ở dòng 1 và giá trị ở dòng 2:
 
 ```
-LCD 1        LCD 2        LCD 3        LCD 4
+LCD 1          LCD 2         LCD 3        LCD 4
 CRANK (khuyu)  CAM (suy ra)  BOOST        RAIL
 741 rpm        1482 rpm      -0.53 bar    356.0 bar
 ```
 
-(Số trong ví dụ minh họa dựng từ log, không phải kết quả đo trực tiếp.) Giá trị không có dữ liệu hiện `--`. LCD cập nhật mỗi giây khi chạy chế độ `m` hoặc `t`.
+(Số trong ví dụ là số minh họa dựng từ log, không phải kết quả đo trực tiếp.) LCD cập nhật 2 lần mỗi giây, chỉ ghi lại khi nội dung thay đổi để đỡ nhấp nháy.
 
-### 7.4 Thư viện và cấu hình
+### 8.4 Thư viện và cấu hình
 
 - Cài thư viện **LiquidCrystal I2C** (tác giả Frank de Brabander) trong Library Manager. `Wire.h` có sẵn trong Arduino IDE.
 - Code mặc định LCD 16x2. Nếu dùng LCD 20x4, sửa `LCD_COLS` thành 20 và `LCD_ROWS` thành 4.
@@ -287,7 +315,7 @@ CRANK (khuyu)  CAM (suy ra)  BOOST        RAIL
 
 ---
 
-## 8. ECU và sơ đồ chân (tham khảo, chưa xác nhận)
+## 9. ECU và sơ đồ chân (tham khảo, chưa xác nhận)
 
 Loại ECU của Santa Fe TCI-D chưa được xác nhận. Cách chắc chắn nhất: đọc nhãn trên thân ECU (số Bosch `0 281 0xx xxx`, số Hyundai `39xxx-xxxxx`) rồi tra sơ đồ chân đúng.
 
@@ -306,7 +334,7 @@ Bảng dưới là của **Bosch EDC16C39 bản Alfa Romeo / Fiat / Lancia** (ca
 
 ---
 
-## 9. Sơ đồ nối dây MCP2515
+## 10. Sơ đồ nối dây MCP2515
 
 ### MCP2515 <-> Arduino Uno
 
@@ -337,9 +365,9 @@ MCP2515 cần điện trở đầu cuối 120 Ω giữa CANH và CANL (nhiều m
 
 ---
 
-## 10. Cách dùng
+## 11. Cách hoạt động và cấu hình
 
-Cấu hình trong code:
+### 11.1 Cấu hình trong code
 
 ```cpp
 #define MCP_CLOCK     MCP_8MHZ   // đổi thành MCP_16MHZ nếu thạch anh module là 16 MHz
@@ -347,60 +375,79 @@ Cấu hình trong code:
 #define CRANK_PER_CAM 0.5        // 2 vòng cam = 1 vòng khuỷu (xem mục 4.2)
 #define LCD_COLS      16         // LCD 16x2; đổi 20 và 4 nếu dùng LCD 20x4
 #define LCD_ROWS      2
+#define USE_WATCHDOG  1          // 1 = tự reset nếu treo
 ```
 
-Mở Serial Monitor: **115200 baud**, chọn **Newline**.
+### 11.2 Trình tự khi cấp nguồn
 
-Khi bật nguồn, code tự dò tốc độ CAN, quét PID rồi **chạy luôn chế độ theo dõi `m`**, nên 4 LCD tự cập nhật mà không cần gõ lệnh.
+1. Khởi động 4 LCD, hiện "SantaFe TCI-D / Dang khoi dong".
+2. Quét I2C và in danh sách địa chỉ ra Serial.
+3. Dò tốc độ CAN (500, 250, 125 kbps), mỗi tốc độ nghe 3 giây.
+4. Quét PID ECU hỗ trợ.
+5. Chạy vòng lặp chính: đọc khung CAN liên tục, hỏi PID BOOST/RAIL mỗi 1 giây, cập nhật LCD mỗi 0,5 giây.
 
-| Lệnh | Chức năng |
+### 11.3 Không nhận lệnh
+
+Code **không đọc Serial**. Lý do: thiết bị gắn trên xe không có người gõ lệnh, và nhiễu trên chân RX có thể vô tình gửi một ký tự làm đổi chế độ. Serial (115200 baud) chỉ in thông tin để xem khi cắm máy tính: dòng khởi động, danh sách PID, và mỗi giây một dòng trạng thái:
+
+```
+CRANK=741  CAM=1482  BOOST=-0.53  RAIL=356.0
+```
+
+Giá trị đang được giữ (không còn mới) có dấu `*`, giá trị mất dữ liệu hiện `--`.
+
+Các chức năng của bản có lệnh (đọc mã lỗi, nghe bus, xuất CSV, quét dịch vụ 0x21) **đã bỏ** khỏi bản gắn xe. Nếu cần các chức năng đó, dùng bản code có lệnh trên bàn thử.
+
+### 11.4 Tự phục hồi khi chạy lâu trên xe
+
+| Tình huống | Cách xử lý |
 |---|---|
-| `m` | Theo dõi 4 thông số (CRANK, CAM, BOOST, RAIL) mỗi giây, cập nhật LCD (mặc định khi bật nguồn) |
-| `t` | In 1 dòng CSV mỗi giây để đối chiếu với máy chẩn đoán, cập nhật LCD |
-| `p` | Liệt kê PID Mode 01 mà ECU hỗ trợ |
-| `d` | Đọc mã lỗi (Mode 03 đã lưu + Mode 07 đang chờ) |
-| `s` | Nghe bus, chỉ in khi dữ liệu đổi (LCD không cập nhật) |
-| `a` | Nghe bus, in tất cả khung (LCD không cập nhật) |
-| `k` | Quét dịch vụ riêng 0x21 (chỉ đọc) |
-| `wNN` | Theo dõi 1 LID, ví dụ `w05` |
-| `l` / `n` | Chế độ chỉ nghe (không ACK) / chế độ NORMAL |
-| `r` | Dò lại tốc độ CAN |
-| `i` | Quét I2C, kiểm tra 4 LCD (mong đợi 0x20 0x21 0x22 0x23) |
+| MCP2515 không phản hồi | Hiện `LOI MCP2515 / Kiem tra day SPI` trên LCD 1, thử lại liên tục |
+| ECU chưa sẵn sàng lúc bật nguồn | Quét PID lại mỗi 10 giây |
+| Mất hết khung CAN hơn 30 giây | Dò lại tốc độ CAN và quét lại PID |
+| Không nhận khung 0x316 hơn 1 giây | CRANK lấy từ PID 0C |
+| LCD lỗi hiển thị do nhiễu | Khởi động lại 4 LCD mỗi 60 giây |
+| Bus I2C bị treo | Có timeout I2C (nếu thư viện Wire hỗ trợ) |
+| Chương trình bị treo | Watchdog 8 giây tự reset Arduino |
 
-Các lệnh `p`, `d`, `k`, `s`, `a` chuyển sang chế độ nghe/đọc nên LCD ngừng cập nhật cho đến khi gõ lại `m`.
-
-### Ví dụ kết quả lệnh `m`
-
-```
-=== Thong so ===
-[CRANK] RPM (khung 0x316): 374
-[CRANK] RPM (PID 0C, chuan /4): 729
-[CAM]   (suy ra tu crank) RPM = 182.3  goc cam tuong doi = 75 do
-[BOOST] MAP: 47 kPa, khi quyen: 100 kPa => boost = -53 kPa = -0.53 bar
-[RAIL]  PID 23: raw=3560  => 356.0 bar
-```
-
-Mỗi dòng ứng với một thông số ở mục 3–6. Log này đo bằng **bản code cũ** (hệ số 0.125 và cam = khuỷu / 2), nên số khung 0x316 đang bằng khoảng một nửa PID 0C và số CAM chưa theo tỉ số mới. Hãy chạy lại với code mới và cập nhật log.
-
-### Cột CSV của lệnh `t`
-
-| Cột | Ý nghĩa |
-|---|---|
-| `rpm316` | CRANK từ khung 0x316 |
-| `rpm_pid` | CRANK từ PID 0C |
-| `map`, `baro`, `boost` | BOOST và hai thành phần |
-| `rail23_raw`, `rail23_bar`, `rail59_raw`, `rail22_raw` | RAIL |
-| `cam_rpm`, `cam_deg` | CAM suy ra |
-| `d316`, `d329`, `d545` | Dữ liệu thô của 3 khung định kỳ |
+Nếu bản mạch Arduino là bản clone cũ bị reset lặp khi bật watchdog, đặt `USE_WATCHDOG 0`.
 
 ---
 
-## 11. Nhận xét kết quả đo
+## 12. Giá trị khi hoạt động bình thường (từ log đo)
 
-- **P0341** xuất hiện ở cả Mode 03 và Mode 07: tương quan cam/khuỷu sai, còn đang xảy ra.
-- Áp rail dao động cùng với P0087/P0091/P0253: phù hợp với việc ECU không đồng bộ được pha cam/khuỷu. Đây là suy luận, cần đo tín hiệu thật trước khi kết luận cảm biến cam hỏng.
-- P0047, P0101, P0489, P0473 nhiều khả năng là lỗi thứ cấp do động cơ chưa chạy; chưa nên kết luận từng mã.
+Ba lần đo liên tiếp khoảng 16:35:21 đến 16:35:23:
+
+| Thông số | Lần 1 | Lần 2 | Lần 3 |
+|---|---|---|---|
+| CRANK, khung 0x316 (hệ số cũ 0.125) | 365 | 379 | 371 |
+| CRANK, PID 0C | 725 | 729 | 756 |
+| CAM suy ra (code cũ: khuỷu / 2) | 181,3 | 182,3 | 189,0 |
+| MAP / khí quyển | 47 / 100 kPa | 47 / 100 kPa | 47 / 100 kPa |
+| BOOST | −0,53 bar | −0,53 bar | −0,53 bar |
+| RAIL, PID 23 | 393,4 bar | 345,0 bar | 336,2 bar |
+| Nhiệt độ nước / khí nạp | 31 / 53 °C | 31 / 53 °C | 31 / 53 °C |
+
+Log này đo bằng **bản code cũ** (hệ số 0.125, cam = khuỷu / 2). Với code mới, giá trị kỳ vọng khi chạy bình thường:
+
+| Thông số | Khoảng giá trị kỳ vọng |
+|---|---|
+| CRANK | khoảng 730 đến 760 vòng/phút (khung 0x316 × 0.25) |
+| CAM | khoảng 1460 đến 1510 vòng/phút (khuỷu × 2) |
+| BOOST | −0,53 bar (MAP đứng yên 47 kPa trong log) |
+| RAIL | khoảng 336 đến 393 bar, đang dao động |
+
+Vì ở trạng thái bình thường RAIL luôn ở mức hàng trăm bar và RPM luôn ở khoảng 700 đến 760, một giá trị 0 xuất hiện giữa lúc đó là lỗi dữ liệu, và là lý do có cơ chế giữ giá trị cũ ở mục 7. Hãy chạy lại với code mới để cập nhật log và xác nhận các khoảng giá trị trên.
+
+---
+
+## 13. Nhận xét kết quả đo
+
+- Các mã lỗi **P0341, P0087, P0091, P0253** từng được đọc từ ECU (cả Mode 03 và Mode 07 với P0341). P0341 là tương quan cam/khuỷu sai, còn đang xảy ra.
+- Áp rail dao động cùng với nhóm mã lỗi áp ray: phù hợp với việc ECU không đồng bộ được pha cam/khuỷu. Đây là suy luận, cần đo tín hiệu thật trước khi kết luận cảm biến cam hỏng.
+- P0047, P0101, P0489, P0473 nhiều khả năng là lỗi thứ cấp; chưa nên kết luận từng mã.
 - Một nguyên nhân có thể gây P0341 trên bàn thử là tỉ số bánh răng/dây curoa giữa khuỷu và cam chưa đúng với ECU mong đợi.
+- MAP không đổi (47 kPa) và áp ray dao động mạnh là hai điểm cần đối chiếu thêm với máy chẩn đoán.
 
 Cách xác nhận cam:
 
@@ -411,12 +458,12 @@ Cách xác nhận cam:
 
 ---
 
-## 12. An toàn
+## 14. An toàn
 
-Code chỉ đọc (Mode 01/03/07 và dịch vụ 0x21 đọc). Không ghi gì vào ECU. Nên dùng chế độ `l` (chỉ nghe) khi chỉ cần quan sát bus.
+Code chỉ đọc (Mode 01 và khung phát định kỳ). Không ghi gì vào ECU.
 
 ---
 
-## 13. Tác giả
+## 15. Tác giả
 
 Cấu trúc code + nghiên cứu thuộc về tác giả TUIOT
