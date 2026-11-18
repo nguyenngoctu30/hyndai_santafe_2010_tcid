@@ -9,10 +9,10 @@
 
 | Thông số | Lấy từ | Công thức | LCD | Địa chỉ I2C |
 |---|---|---|---|---|
-| **CRANK** (RPM trục khuỷu) | Khung CAN 0x316 **và** PID 0C | `(256A+B)/4` (PID 0C) | LCD 1 | 0x20 |
-| **CAM** (trục cam) | **Không có tín hiệu thật**: tính từ CRANK | `RPM_cam = RPM_khuỷu × 2` | LCD 2 | 0x21 |
-| **BOOST** (áp suất tăng áp) | PID 0B (MAP) và PID 33 (khí quyển) | `MAP − Khí quyển` | LCD 3 | 0x22 |
-| **RAIL** (áp suất ray nhiên liệu) | PID 23 (và 59, 22 nếu ECU hỗ trợ) | `(256A+B) × 10` kPa | LCD 4 | 0x23 |
+| **CRANK** (RPM trục khuỷu) | Khung CAN 0x316 **và** PID 0C | `(256A+B)/4` (PID 0C) | LCD 1 | 0x27 |
+| **CAM** (trục cam) | **Không có tín hiệu thật**: tính từ CRANK | `RPM_cam = RPM_khuỷu × 2` | LCD 2 | 0x26 |
+| **BOOST** (áp suất tăng áp) | PID 0B (MAP) và PID 33 (khí quyển) | `MAP − Khí quyển` | LCD 3 | 0x25 |
+| **RAIL** (áp suất ray nhiên liệu) | PID 23 (và 59, 22 nếu ECU hỗ trợ) | `(256A+B) × 10` kPa | LCD 4 | 0x24 |
 
 Hai cách để có dữ liệu:
 
