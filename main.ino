@@ -67,6 +67,18 @@
 #define SHOW_HOLD_MARK 1        // 1 = hien dau * khi dang giu gia tri cu
 #define USE_WATCHDOG 1          // 1 = tu reset neu treo. Dat 0 neu bootloader khong ho tro watchdog
 
+// ---------------- Kieu du lieu ----------------
+// PHAI dat truoc ham dau tien cua file, neu khong Arduino IDE se bao loi "Chan was not declared"
+enum { R_NONE = 0, R_ZERO = 1, R_GOOD = 2 };   // khong co du lieu / bang 0 / gia tri hop le
+
+struct Chan {
+  float val;                  // gia tri hop le gan nhat
+  unsigned long goodMs;       // thoi diem nhan gia tri hop le gan nhat
+  byte last;                  // trang thai lan doc gan nhat
+  bool seen;                  // da tung co gia tri hop le
+};
+Chan chCrank, chCam, chBoost, chRail;
+
 #if USE_WATCHDOG
   #define WDT_KICK() wdt_reset()
   // Tat watchdog som sau khi reset, tranh vong lap reset
@@ -101,16 +113,6 @@ byte pidMap[28];
 bool pidScanned = false;
 
 // ---------------- Kenh du lieu co "giu gia tri cu" ----------------
-enum { R_NONE = 0, R_ZERO = 1, R_GOOD = 2 };   // khong co du lieu / bang 0 / gia tri hop le
-
-struct Chan {
-  float val;                  // gia tri hop le gan nhat
-  unsigned long goodMs;       // thoi diem nhan gia tri hop le gan nhat
-  byte last;                  // trang thai lan doc gan nhat
-  bool seen;                  // da tung co gia tri hop le
-};
-Chan chCrank, chCam, chBoost, chRail;
-
 unsigned long lastCrankMs = 0;   // thoi diem khung 0x316 gan nhat
 int lastBaro = 101;              // ap suat khi quyen hop le gan nhat (kPa)
 
